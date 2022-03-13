@@ -3,8 +3,12 @@ package mr
 import (
 	"fmt"
 	"hash/fnv"
+	"io/ioutil"
 	"log"
 	"net/rpc"
+	"os"
+	"sort"
+	"time"
 )
 
 //
@@ -14,6 +18,14 @@ type KeyValue struct {
 	Key   string
 	Value string
 }
+
+// for sorting by key.
+type ByKey []KeyValue
+
+// for sorting by key.
+func (a ByKey) Len() int           { return len(a) }
+func (a ByKey) Swap(i, j int)      { a[i], a[j] = a[j], a[i] }
+func (a ByKey) Less(i, j int) bool { return a[i].Key < a[j].Key }
 
 //
 // use ihash(key) % NReduce to choose the reduce
@@ -36,21 +48,91 @@ func Worker(mapf func(string, string) []KeyValue,
 	// uncomment to send the Example RPC to the coordinator.
 	// CallExample()
 	//first get map task
-	GetMapTask()
+	var workername string
+	var maptask string
+	code, status := MR_NONE, MR_GET_TASK
+	for {
+		maptask, code, workername = GetMapTask(status)
+		if code == MR_SUCCESS {
+			status = MR_GET_TASK_SECOND
+			//execute map task
+			maptaskcontent, _ := ioutil.ReadFile(maptask)
+			mapres := mapf(maptask, string(maptaskcontent))
+			intermedname := "mr-med-" + workername
+			sort.Sort(ByKey(mapres))
+			intermedfile, _ := os.Create(intermedname)
 
-	//execute map task
-	mapf()
+			for _, i := range mapres {
+				fmt.Fprintf(intermedfile, "%v %v\n", i.Key, i.Value)
+			}
+			code = CommitMapTask()
+		} else if code == MR_STILL_WAIT { //map phase has not finished
+			time.Sleep(time.Second)
+		} else {
+			break
+		}
+	}
 
 	//assign the worker the map worker has been done and get reduce task
-	AssignaAndGetReduceTask()
-
-	//execute reduce task
-	reducef()
-
+	code := GetReduceTask()
+	for code == MR_STILL_WAIT { //map phase has not finished
+		time.Sleep(time.Second)
+		code = GetReduceTask()
+	}
+	if code == MR_FINISHED {
+		return
+	} else if code == MR_SUCCESS {
+		//execute reduce task
+		reducef()
+	}
 }
 
-func GetMapTask() {
+func GetMapTask(status int) (string, int, string) {
+	req := GetMapTaskReq{}
+	req.status = status
+	rep := GetMapTaskRep{}
+	ok := call("Coordinator.GetMapTask", &req, &rep)
+	if ok {
+		if rep.status == MR_SUCCESS {
+			return rep.file, rep.status, rep.name
+		} else {
+			return "", rep.status, rep.name
+		}
+	} else {
+		return "", MR_FINISHED, ""
+	}
+}
 
+func CommitMapTask() int {
+	req := GetMapTaskReq{}
+	req.status = MR_MAP_FINISHED
+	rep := GetMapTaskRep{}
+	ok := call("Coordinator.GetMapTask", &req, &rep)
+	if ok {
+		if rep.status == MR_SUCCESS {
+			return rep.status
+		} else {
+			return rep.status
+		}
+	} else {
+		return MR_FINISHED
+	}
+}
+
+func GetReduceTask() int {
+	req := GetReduceTaskReq{}
+	rep := GetReduceTaskRep{}
+	ok := call("Coordinator.GetReduceTask", &req, &rep)
+	if ok {
+		if rep.status == MR_SUCCESS {
+
+		} else {
+
+		}
+	} else {
+		return nil
+	}
+	return MP_FINISHED_OR_BROKEN
 }
 
 //
@@ -58,29 +140,29 @@ func GetMapTask() {
 //
 // the RPC argument and reply types are defined in rpc.go.
 //
-func CallExample() {
+// func CallExample() {
 
-	// declare an argument structure.
-	args := ExampleArgs{}
+// 	// declare an argument structure.
+// 	args := ExampleArgs{}
 
-	// fill in the argument(s).
-	args.X = 99
+// 	// fill in the argument(s).
+// 	args.X = 99
 
-	// declare a reply structure.
-	reply := ExampleReply{}
+// 	// declare a reply structure.
+// 	reply := ExampleReply{}
 
-	// send the RPC request, wait for the reply.
-	// the "Coordinator.Example" tells the
-	// receiving server that we'd like to call
-	// the Example() method of struct Coordinator.
-	ok := call("Coordinator.Example", &args, &reply)
-	if ok {
-		// reply.Y should be 100.
-		fmt.Printf("reply.Y %v\n", reply.Y)
-	} else {
-		fmt.Printf("call failed!\n")
-	}
-}
+// 	// send the RPC request, wait for the reply.
+// 	// the "Coordinator.Example" tells the
+// 	// receiving server that we'd like to call
+// 	// the Example() method of struct Coordinator.
+// 	ok := call("Coordinator.Example", &args, &reply)
+// 	if ok {
+// 		// reply.Y should be 100.
+// 		fmt.Printf("reply.Y %v\n", reply.Y)
+// 	} else {
+// 		fmt.Printf("call failed!\n")
+// 	}
+// }
 
 //
 // send an RPC request to the coordinator, wait for the response.

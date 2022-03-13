@@ -4,7 +4,7 @@
  * @Author: MoonKnight
  * @Date: 2022-03-10 15:48:39
  * @LastEditors: MoonKnight
- * @LastEditTime: 2022-03-11 00:38:48
+ * @LastEditTime: 2022-03-12 20:47:12
  */
 package mr
 
@@ -33,10 +33,46 @@ type ExampleReply struct {
 }
 
 // Add your RPC definitions here.
+const (
+	MR_NONE = iota
+	MR_SUCCESS
+	MR_MAP_TIME_OUT
+	MR_REDUCE_TIME_OUT
+	MR_STILL_WAIT
+	MR_GET_TASK
+	MR_GET_TASK_SECOND
+	MR_MAP_TASK_FINISH
+	MR_FINISHED
+
+	//map_or_reduce_status
+	MR_MAP_NOT_START
+	MR_MAP_IN_PROCESS
+	MR_MAP_FINISHED
+)
+
 type GetMapTaskReq struct {
+	status  int
+	file    string
+	name    string
+	medfile string
 }
 
 type GetMapTaskRep struct {
+	status int
+	name   string
+	file   string
+}
+
+type GetReduceTaskReq struct {
+	status  int
+	outfile string
+	name    string
+}
+
+type GetReduceTaskRep struct {
+	status int
+	name   string
+	file   string
 }
 
 // Cook up a unique-ish UNIX-domain socket name
