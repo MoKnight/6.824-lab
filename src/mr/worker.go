@@ -1,6 +1,7 @@
 package mr
 
 import (
+	"encoding/json"
 	"fmt"
 	"hash/fnv"
 	"io/ioutil"
@@ -48,24 +49,46 @@ func Worker(mapf func(string, string) []KeyValue,
 	// uncomment to send the Example RPC to the coordinator.
 	// CallExample()
 	//first get map task
-	var workername string
+	workername := ""
+	var outputfile []string
 	var maptask string
+	var reducetask string
+
 	code, status := MR_NONE, MR_GET_TASK
-	for {
-		maptask, code, workername = GetMapTask(status)
+	for code != MR_FINISHED {
+		maptask, code, workername, outputfile = GetMapTask(status, workername, "")
+
 		if code == MR_SUCCESS {
-			status = MR_GET_TASK_SECOND
 			//execute map task
 			maptaskcontent, _ := ioutil.ReadFile(maptask)
 			mapres := mapf(maptask, string(maptaskcontent))
-			intermedname := "mr-med-" + workername
 			sort.Sort(ByKey(mapres))
-			intermedfile, _ := os.Create(intermedname)
+			nReduce, usedn, n := len(outputfile), -1, -2
+			openstatus := false
+			var tempfile *os.File
 
+			//not good too mant open and close
 			for _, i := range mapres {
-				fmt.Fprintf(intermedfile, "%v %v\n", i.Key, i.Value)
+				n = ihash(i.Key) % nReduce
+				if n != usedn {
+					if !openstatus {
+						tempfile, _ = os.OpenFile(outputfile[n], os.O_CREATE|os.O_RDWR|os.O_APPEND, 0644)
+						openstatus = true
+					}
+					tempfile.Close()
+					tempfile, _ = os.OpenFile(outputfile[n], os.O_CREATE|os.O_RDWR|os.O_APPEND, 0644)
+				}
+				enc := json.NewEncoder(tempfile)
+				if err := enc.Encode(&i); err != nil {
+					tempfile.Close()
+					return
+				}
 			}
-			code = CommitMapTask()
+			tempfile.Close()
+			fmt.Println("finished")
+
+			_, code, _, _ = GetMapTask(MR_MAP_TASK_FINISHED, workername, maptask)
+			status = MR_GET_TASK_SECOND
 		} else if code == MR_STILL_WAIT { //map phase has not finished
 			time.Sleep(time.Second)
 		} else {
@@ -73,67 +96,99 @@ func Worker(mapf func(string, string) []KeyValue,
 		}
 	}
 
-	//assign the worker the map worker has been done and get reduce task
-	code := GetReduceTask()
-	for code == MR_STILL_WAIT { //map phase has not finished
-		time.Sleep(time.Second)
-		code = GetReduceTask()
+	if workername == "" {
+		status = MR_GET_TASK
+	} else {
+		status = MR_GET_TASK_SECOND
 	}
-	if code == MR_FINISHED {
-		return
-	} else if code == MR_SUCCESS {
-		//execute reduce task
-		reducef()
+
+	rawreduece := []KeyValue{}
+	for code != MR_FINISHED {
+		reducetask, code, workername, outputfile = GetReduceTask(status, workername, "")
+		if code == MR_SUCCESS {
+			rawreduece = rawreduece[0:0]
+			//execute reduce task
+			for _, tempfilename := range outputfile {
+				tempfile, _ := os.OpenFile(tempfilename, os.O_CREATE|os.O_RDWR, 0644)
+				dec := json.NewDecoder(tempfile)
+				for {
+					var kv KeyValue
+					if err := dec.Decode(&kv); err != nil {
+						break
+					}
+					rawreduece = append(rawreduece, kv)
+				}
+			}
+			sort.Sort(ByKey(rawreduece))
+
+			finalfile, _ := os.Create(reducetask)
+			i := 0
+			for i < len(rawreduece) {
+				j := i + 1
+				for j < len(rawreduece) && rawreduece[j].Key == rawreduece[i].Key {
+					j++
+				}
+				values := []string{}
+				for k := i; k < j; k++ {
+					values = append(values, rawreduece[k].Value)
+				}
+				output := reducef(rawreduece[i].Key, values)
+
+				fmt.Fprintf(finalfile, "%v %v\n", rawreduece[i].Key, output)
+				i = j
+			}
+			finalfile.Close()
+
+			_, code, _, _ = GetReduceTask(MR_REDUCE_TASK_FINISHED, workername, reducetask)
+			status = MR_GET_TASK_SECOND
+		} else if code == MR_STILL_WAIT { //map phase has not finished
+			time.Sleep(time.Second)
+		} else {
+			break
+		}
 	}
 }
 
-func GetMapTask(status int) (string, int, string) {
-	req := GetMapTaskReq{}
-	req.status = status
-	rep := GetMapTaskRep{}
+func GetMapTask(status int, workername string, str string) (string, int, string, []string) {
+	req := GetTaskMes{}
+	req.Status = status
+	req.Name = workername
+	req.File = str
+	rep := GetTaskMes{}
 	ok := call("Coordinator.GetMapTask", &req, &rep)
 	if ok {
-		if rep.status == MR_SUCCESS {
-			return rep.file, rep.status, rep.name
+		if rep.Status == MR_SUCCESS {
+			return rep.File, rep.Status, rep.Name, rep.Outputfile
 		} else {
-			return "", rep.status, rep.name
+			return "", rep.Status, rep.Name, nil
 		}
 	} else {
-		return "", MR_FINISHED, ""
+		return "", MR_FINISHED, "", nil
 	}
 }
 
-func CommitMapTask() int {
-	req := GetMapTaskReq{}
-	req.status = MR_MAP_FINISHED
-	rep := GetMapTaskRep{}
-	ok := call("Coordinator.GetMapTask", &req, &rep)
-	if ok {
-		if rep.status == MR_SUCCESS {
-			return rep.status
-		} else {
-			return rep.status
-		}
-	} else {
-		return MR_FINISHED
-	}
-}
-
-func GetReduceTask() int {
-	req := GetReduceTaskReq{}
-	rep := GetReduceTaskRep{}
+func GetReduceTask(status int, workername string, str string) (string, int, string, []string) {
+	req := GetTaskMes{}
+	req.Status = status
+	req.Name = workername
+	req.File = str
+	rep := GetTaskMes{}
 	ok := call("Coordinator.GetReduceTask", &req, &rep)
 	if ok {
-		if rep.status == MR_SUCCESS {
-
+		if rep.Status == MR_SUCCESS {
+			return rep.File, rep.Status, rep.Name, rep.Outputfile
 		} else {
-
+			return "", rep.Status, rep.Name, nil
 		}
 	} else {
-		return nil
+		return "", MR_FINISHED, "", nil
 	}
-	return MP_FINISHED_OR_BROKEN
 }
+
+// func FileExist(path string) bool {
+// 	_, err := os.Lstat(path)
+// 	return !os.IsNotExist(err)
+// }
 
 //
 // example function to show how to make an RPC call to the coordinator.
@@ -170,9 +225,9 @@ func GetReduceTask() int {
 // returns false if something goes wrong.
 //
 func call(rpcname string, args interface{}, reply interface{}) bool {
-	// c, err := rpc.DialHTTP("tcp", "127.0.0.1"+":1234")
-	sockname := coordinatorSock()
-	c, err := rpc.DialHTTP("unix", sockname)
+	c, err := rpc.DialHTTP("tcp", "127.0.0.1"+":2222")
+	//sockname := coordinatorSock()
+	//c, err := rpc.DialHTTP("unix", sockname)
 	if err != nil {
 		log.Fatal("dialing:", err)
 	}

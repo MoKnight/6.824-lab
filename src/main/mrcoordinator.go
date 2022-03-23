@@ -4,7 +4,7 @@
  * @Author: MoonKnight
  * @Date: 2022-03-10 15:48:39
  * @LastEditors: MoonKnight
- * @LastEditTime: 2022-03-10 16:42:24
+ * @LastEditTime: 2022-03-22 14:19:45
  */
 package main
 
@@ -31,7 +31,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	m := mr.MakeCoordinator(os.Args[1:], 10)
+	m := mr.MakeCoordinator(os.Args[1:], 1)
 	for m.Done() == false {
 		time.Sleep(time.Second)
 	}
