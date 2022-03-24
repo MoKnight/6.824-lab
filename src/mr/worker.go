@@ -63,29 +63,34 @@ func Worker(mapf func(string, string) []KeyValue,
 			maptaskcontent, _ := ioutil.ReadFile(maptask)
 			mapres := mapf(maptask, string(maptaskcontent))
 			sort.Sort(ByKey(mapres))
-			nReduce, usedn, n := len(outputfile), -1, -2
-			openstatus := false
+			nReduce := len(outputfile)
+			var tempfilenme []*os.File
 			var tempfile *os.File
+
+			//add temp file part
+			for _, i := range outputfile {
+				temp, err := ioutil.TempFile("./", i)
+				tempfilenme = append(tempfilenme, temp)
+				if err != nil {
+					fmt.Println("文件创建失败")
+					return
+				}
+			}
 
 			//not good too mant open and close
 			for _, i := range mapres {
-				n = ihash(i.Key) % nReduce
-				if n != usedn {
-					if !openstatus {
-						tempfile, _ = os.OpenFile(outputfile[n], os.O_CREATE|os.O_RDWR|os.O_APPEND, 0644)
-						openstatus = true
-					}
-					tempfile.Close()
-					tempfile, _ = os.OpenFile(outputfile[n], os.O_CREATE|os.O_RDWR|os.O_APPEND, 0644)
-				}
-				enc := json.NewEncoder(tempfile)
+				n := ihash(i.Key) % nReduce
+				enc := json.NewEncoder(tempfilenme[n])
 				if err := enc.Encode(&i); err != nil {
 					tempfile.Close()
 					return
 				}
 			}
-			tempfile.Close()
-			fmt.Println("finished")
+
+			for num, i := range tempfilenme {
+				os.Rename(i.Name(), outputfile[num])
+				i.Close()
+			}
 
 			_, code, _, _ = GetMapTask(MR_MAP_TASK_FINISHED, workername, maptask)
 			status = MR_GET_TASK_SECOND
@@ -121,7 +126,12 @@ func Worker(mapf func(string, string) []KeyValue,
 			}
 			sort.Sort(ByKey(rawreduece))
 
-			finalfile, _ := os.Create(reducetask)
+			finalfile, err := ioutil.TempFile("./", reducetask)
+			if err != nil {
+				fmt.Println("文件创建失败")
+				return
+			}
+
 			i := 0
 			for i < len(rawreduece) {
 				j := i + 1
@@ -137,6 +147,7 @@ func Worker(mapf func(string, string) []KeyValue,
 				fmt.Fprintf(finalfile, "%v %v\n", rawreduece[i].Key, output)
 				i = j
 			}
+			os.Rename(finalfile.Name(), reducetask)
 			finalfile.Close()
 
 			_, code, _, _ = GetReduceTask(MR_REDUCE_TASK_FINISHED, workername, reducetask)
@@ -225,9 +236,9 @@ func GetReduceTask(status int, workername string, str string) (string, int, stri
 // returns false if something goes wrong.
 //
 func call(rpcname string, args interface{}, reply interface{}) bool {
-	c, err := rpc.DialHTTP("tcp", "127.0.0.1"+":2222")
-	//sockname := coordinatorSock()
-	//c, err := rpc.DialHTTP("unix", sockname)
+	//c, err := rpc.DialHTTP("tcp", "127.0.0.1"+":2222")
+	sockname := coordinatorSock()
+	c, err := rpc.DialHTTP("unix", sockname)
 	if err != nil {
 		log.Fatal("dialing:", err)
 	}
