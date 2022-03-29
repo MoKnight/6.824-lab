@@ -51,8 +51,7 @@ func Worker(mapf func(string, string) []KeyValue,
 	//first get map task
 	workername := ""
 	var outputfile []string
-	var maptask string
-	var reducetask string
+	var maptask, reducetask string
 
 	code, status := MR_NONE, MR_GET_TASK
 	for code != MR_FINISHED {
@@ -161,10 +160,7 @@ func Worker(mapf func(string, string) []KeyValue,
 }
 
 func GetMapTask(status int, workername string, str string) (string, int, string, []string) {
-	req := GetTaskMes{}
-	req.Status = status
-	req.Name = workername
-	req.File = str
+	req := GetTaskMes{Status: status, Name: workername, File: str}
 	rep := GetTaskMes{}
 	ok := call("Coordinator.GetMapTask", &req, &rep)
 	if ok {
@@ -179,10 +175,7 @@ func GetMapTask(status int, workername string, str string) (string, int, string,
 }
 
 func GetReduceTask(status int, workername string, str string) (string, int, string, []string) {
-	req := GetTaskMes{}
-	req.Status = status
-	req.Name = workername
-	req.File = str
+	req := GetTaskMes{Status: status, Name: workername, File: str}
 	rep := GetTaskMes{}
 	ok := call("Coordinator.GetReduceTask", &req, &rep)
 	if ok {
