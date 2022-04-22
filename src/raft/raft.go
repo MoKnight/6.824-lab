@@ -320,11 +320,12 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 		rf.persist()
 
 		// Election restriction
-		_, commitlogterm := rf.searchLogByIndex(rf.commitIndex)
-		if args.LastLogTerm < commitlogterm {
+		//fix for 2C
+		lastlogterm, lastlogIndex := rf.getLastTermIndex()
+		if args.LastLogTerm < lastlogterm {
 			return
-		} else if args.LastLogTerm == commitlogterm {
-			if args.LastLogIndex < rf.commitIndex {
+		} else if args.LastLogTerm == lastlogterm {
+			if args.LastLogIndex < lastlogIndex {
 				return
 			}
 		}
@@ -352,6 +353,22 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 			// vote for other server
 			return
 		}
+
+		// if rf.votedFor == -1 {
+		// 	lastlogterm, lastlogIndex := rf.getLastTermIndex()
+		// 	if args.LastLogTerm < lastlogterm {
+		// 		return
+		// 	} else if args.LastLogTerm == lastlogterm {
+		// 		if args.LastLogIndex < lastlogIndex {
+		// 			return
+		// 		}
+		// 	}
+		// 	rf.votedFor = args.CandidateId
+		// 	// rf.currentTerm = args.Term
+		// 	reply.VoteGranted = true
+		// 	rf.electionTimer.Reset(rf.electionInterval)
+		// 	DPrintf("here?")
+		// }
 
 		// no wote
 	} else {
@@ -417,6 +434,7 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 			_, reply.LogIndex = rf.getLastTermIndex() //refresh
 
 		} else {
+			args.PrevLogTerm -= 1
 			if rf.log[len(rf.log)-1].Term >= args.PrevLogTerm {
 				reply.LogTerm, reply.LogIndex = rf.lastSmallTermIndex(args.PrevLogTerm)
 			} else {
@@ -483,6 +501,16 @@ func (rf *Raft) searchLog(logindex int, logterm int) (realidx int, exist bool) {
 		return 0, true
 	}
 
+	// DPrintf("logindex %d idx %d", logindex, rf.log[logindex-1].Index)
+
+	// if logindex > len(rf.log) || logindex < 0 {
+	// 	return -1, false
+	// }
+
+	// if rf.log[logindex-1].Term == logterm {
+	// 	return logindex - 1, true
+	// }
+
 	for i := len(rf.log) - 1; i >= 0; i-- {
 		if rf.log[i].Index == logindex && rf.log[i].Term == logterm {
 			return i, true
@@ -512,7 +540,7 @@ func (rf *Raft) lastSmallTermIndex(expectterm int) (term int, index int) {
 		}
 
 		if rf.log[i].Term <= expectterm { //first one log having term smaller than expectterm
-			term, index = rf.log[i].Index, rf.log[i].Term
+			term, index = rf.log[i].Term, rf.log[i].Index
 			for j := i; j >= 0; j-- {
 				if rf.log[i].Term == term {
 					index = rf.log[i].Index
@@ -814,6 +842,10 @@ func (rf *Raft) sendAppendEntriesToPeer(num int) {
 			rf.nextIndex[num] = reply.LogIndex + 1
 
 			for i := len(rf.log) - 1; i >= 0 && rf.log[i].Index > rf.commitIndex; i-- { //check every log in leader'log to see whether it's ready to commit
+
+				if rf.log[i].Term != rf.currentTerm {
+					break
+				}
 				count := 0
 				for _, matchIndex := range rf.matchIndex {
 					if matchIndex >= rf.log[i].Index {
@@ -843,7 +875,8 @@ func (rf *Raft) sendAppendEntriesToPeer(num int) {
 				if !exist {
 					//send again
 					//find the last small term before the reply.LogTerm
-					_, logindex := rf.lastSmallTermIndex(reply.LogTerm)
+					// _, logindex := rf.lastSmallTermIndex(reply.LogTerm)
+					_, logindex := rf.lastSmallTermIndex(reply.LogTerm - 1)
 					index, _ = rf.searchLogByIndex(logindex)
 					if index == -1 {
 						index = 0
@@ -872,12 +905,12 @@ func (rf *Raft) sendAppendEntriesToPeer(num int) {
 }
 
 func (rf *Raft) makeRequestVoteArgs() RequestVoteArgs {
-	_, lastlogterm := rf.searchLogByIndex(rf.commitIndex)
-	// lastlogterm, lastlastlogindex := rf.getLastTermIndex()
+	// _, lastlogterm := rf.searchLogByIndex(rf.commitIndex)
+	lastlogterm, lastlastlogindex := rf.getLastTermIndex()
 	request := RequestVoteArgs{
 		Term:         rf.currentTerm,
 		CandidateId:  rf.me,
-		LastLogIndex: rf.commitIndex,
+		LastLogIndex: lastlastlogindex,
 		LastLogTerm:  lastlogterm,
 	}
 	return request
@@ -911,6 +944,9 @@ func (rf *Raft) getprelogtermindex(peerIdx int) (prevLogIndex, prevLogTerm int, 
 	prevLogIndex = nextIdx - 1
 	_, prevLogTerm = rf.searchLogByIndex(prevLogIndex)
 	index, _ := rf.searchLogByIndex(nextIdx)
+	if index < 0 {
+		index = 0
+	}
 	res = append(res, rf.log[index:]...)
 	return
 }
